@@ -25,6 +25,9 @@ def train(
             logits = output.logits
             loss = non_shifting_loss(logits, targets)
             loss.backward()
+
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            print(f"Grad Norm: {grad_norm}")
             optimizer.step()
         print(f"Epoch {epoch}, Loss: {loss.item()}")
     return model

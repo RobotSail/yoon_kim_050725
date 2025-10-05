@@ -60,14 +60,48 @@ class LSTMModel(LSTMPreTrainedModel):
             num_layers=config.num_hidden_layers,
             batch_first=True,
             dropout=config.dropout if config.num_hidden_layers > 1 else 0.0,
+            proj_size=config.proj_size,
         )
+
+        # Output feature size equals proj_size if set, otherwise hidden_size
+        self.output_size = int(config.proj_size) if int(getattr(config, 'proj_size', 0) or 0) > 0 else int(config.hidden_size)
 
         # Optional residual post-LSTM projection to match dims (kept identity when same size)
         self.use_residual = bool(getattr(config, 'residual_connection', False))
         self.residual_scale = float(getattr(config, 'residual_scale', 1.0))
         self.use_residual_layernorm = bool(getattr(config, 'use_residual_layernorm', False))
+        # If residual is enabled and dimensions don't match, project residual to output_size
+        self.residual_proj = None
+        if self.use_residual and self.output_size != int(config.hidden_size):
+            self.residual_proj = nn.Linear(int(config.hidden_size), self.output_size, bias=False)
         if self.use_residual_layernorm:
-            self.residual_ln = nn.LayerNorm(config.hidden_size, eps=getattr(config, 'norm_eps', 1e-6), elementwise_affine=getattr(config, 'elementwise_affine', True))
+            self.residual_ln = nn.LayerNorm(
+                self.output_size,
+                eps=getattr(config, 'norm_eps', 1e-6),
+                elementwise_affine=getattr(config, 'elementwise_affine', True),
+            )
+
+        # Optional self-attention (post-LSTM) using output_size as embed dim
+        self.use_self_attention = bool(getattr(config, 'use_self_attention', False))
+        if self.use_self_attention:
+            num_heads = int(getattr(config, 'num_attention_heads', 8))
+            attn_dropout = float(getattr(config, 'attention_dropout', 0.0))
+            self.self_attn = nn.MultiheadAttention(
+                embed_dim=self.output_size,
+                num_heads=num_heads,
+                dropout=attn_dropout,
+                batch_first=True,
+            )
+
+            self.attn_residual_scale = float(getattr(config, 'attn_residual_scale', 1.0))
+            if bool(getattr(config, 'use_attention_layernorm', True)):
+                self.attn_ln = nn.LayerNorm(
+                    self.output_size,
+                    eps=getattr(config, 'norm_eps', 1e-6),
+                    elementwise_affine=getattr(config, 'elementwise_affine', True),
+                )
+            else:
+                self.attn_ln = None
 
         self.post_init()
 
@@ -110,9 +144,22 @@ class LSTMModel(LSTMPreTrainedModel):
         if self.use_residual:
             # Ensure shapes are compatible; both are (batch, seq, hidden)
             residual = inputs_embeds
+            if self.residual_proj is not None:
+                residual = self.residual_proj(residual)
             lstm_out = lstm_out + self.residual_scale * residual
             if self.use_residual_layernorm:
                 lstm_out = self.residual_ln(lstm_out)
+
+        # Optional self-attention with causal mask
+        if self.use_self_attention:
+            bsz, seq_len, _ = lstm_out.size()
+            # causal mask: allow attending to current and previous tokens
+            # shape expected by PyTorch MHA: (tgt_len, src_len)
+            causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=lstm_out.device, dtype=torch.bool), diagonal=1)
+            attn_out, _ = self.self_attn(lstm_out, lstm_out, lstm_out, attn_mask=causal_mask)
+            lstm_out = lstm_out + self.attn_residual_scale * attn_out
+            if self.attn_ln is not None:
+                lstm_out = self.attn_ln(lstm_out)
 
         # Collect hidden states if requested
         all_hidden_states = None
@@ -140,7 +187,8 @@ class LSTMForCausalLM(LSTMPreTrainedModel):
         super().__init__(config)
         self.model = LSTMModel(config)
         self.vocab_size = config.vocab_size
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        # lm_head must project from the model's output feature size
+        self.lm_head = nn.Linear(self.model.output_size, config.vocab_size, bias=False)
 
         # Initialize weights and apply final processing
         self.post_init()

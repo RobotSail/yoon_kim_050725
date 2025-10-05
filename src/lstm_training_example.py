@@ -68,6 +68,7 @@ def create_muon_optimizer(model: LSTMForCausalLM, lr: float, adamw_lr: float):
 def train(
     model: LSTMForCausalLM,
     train_dl: DataLoader,
+    test_dl: DataLoader,
     optimizer: optim.Optimizer,
     max_epochs: int,
     l1_strength: float = None,
@@ -93,7 +94,12 @@ def train(
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             gradnorm_ema = beta * gradnorm_ema + (1 - beta) * grad_norm
             optimizer.step()
+
+        accuracy = eval(model, test_dl)
+        print(f"Accuracy: {accuracy}")
         print(f"Epoch {epoch}, Loss: {loss.item():.5f}, grad norm: {grad_norm:.5f}")
+        model.train()
+        
     return model
 
 def eval(model: LSTMForCausalLM, test_dl: DataLoader):
@@ -115,10 +121,11 @@ if __name__ == "__main__":
     set_seed(MANUAL_SEED)
 
     kv = 64
-    lr = 1e-2
-    muon_adamw_lr = 1e-2
+    lr = 1e-4
+    # muon_adamw_lr = 1e-3
     num_hidden_layers = 2
-    hidden_size = 512
+    hidden_size = 1024
+    proj_size = 256
     l1_strength = 1e-7
     num_epochs = 60
         #     input_seq_len=4 * kv,
@@ -146,12 +153,20 @@ if __name__ == "__main__":
         vocab_size=4 * kv + 1,
         hidden_size=hidden_size,
         num_hidden_layers=num_hidden_layers,
-        num_proj=None,  # No projection, use full hidden size
-        # dropout=0.1,
+        proj_size=proj_size,
+        dropout=0.1,
 
         residual_connection=True,
         residual_scale=1.0,
         use_residual_layernorm=True,
+
+        # enable self-attention
+        # attention (optional)
+        use_self_attention=True,
+        num_attention_heads = 8,
+        attention_dropout = 0.1,
+        use_attention_layernorm = True,
+        attn_residual_scale = 1.0,
 
 
         # norms and numerics
@@ -173,7 +188,7 @@ if __name__ == "__main__":
     model = LSTMForCausalLM(model_cfg).to(torch.device("cuda:0")).to(torch.float32)
     print(f"Number of parameters: {model.num_parameters():,}")
 
-    torch.compile(model)
+    model = torch.compile(model)
     model.train()
 
 
@@ -188,6 +203,6 @@ if __name__ == "__main__":
 
 
 
-    model = train(model, train_dl, optimizer, num_epochs, l1_strength=l1_strength)
+    model = train(model, train_dl, test_dl, optimizer, num_epochs, l1_strength=l1_strength)
     accuracy = eval(model, test_dl)
     print(f"Accuracy: {accuracy}")
