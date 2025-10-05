@@ -12,7 +12,49 @@ from models.lstm.configuration_lstm import LSTMConfig
 from data_gen import DataConfig, get_dataloaders
 from hack_utils import non_shifting_loss, compute_accuracy
 
-from muon_fsdp2 import Muon
+
+import random
+import numpy as np
+
+MANUAL_SEED = 37
+def set_seed(seed: int):
+    """set all random seeds for reproducibility"""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    # for full determinism (may impact performance)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+# from muon_fsdp2 import Muon
+
+# def muon_param_names(model: LSTMForCausalLM):
+#     valid_params = []
+#     for name, param in model.named_parameters():
+#         if param.dim() == 1:
+#             continue
+
+#         # ignore 1d vectors
+#         if 'embeddings' in name or 'lm_head' in name:
+#             continue
+        
+#         valid_params.append(name)
+    
+#     return valid_params
+
+# def create_muon_optimizer(model: LSTMForCausalLM, lr: float, adamw_lr: float):
+#     muon_names = muon_param_names(model)
+#     adamw_params = [n for n, p in model.named_parameters() if n not in muon_names]
+
+#     # create muon 
+#     muon_optimizer = Muon(
+#         lr=
+#     )
+
+
+
 
 
 def train(
@@ -20,6 +62,7 @@ def train(
     train_dl: DataLoader,
     optimizer: optim.Optimizer,
     max_epochs: int,
+    l1_strength: float = None,
 ):
     model.train()
     beta = 0.9
@@ -32,17 +75,17 @@ def train(
             logits = output.logits
             loss = non_shifting_loss(logits, targets)
 
-            l1_penalty = 0.0000001
-            l1_penalty = l1_penalty * sum(p.abs().sum() for p in model.parameters())
-            loss = loss + l1_penalty
+            # add l1
+            if l1_strength is not None:
+                l1_penalty = l1_strength * sum(p.abs().sum() for p in model.parameters())
+                loss = loss + l1_penalty
 
             loss.backward()
 
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             gradnorm_ema = beta * gradnorm_ema + (1 - beta) * grad_norm
             optimizer.step()
-        print(f"Epoch {epoch}, Loss: {loss.item()}")
-        print(f"Grad Norm EMA: {gradnorm_ema}")
+        print(f"Epoch {epoch}, Loss: {loss.item():.5f}, grad norm: {grad_norm:.5f}")
     return model
 
 def eval(model: LSTMForCausalLM, test_dl: DataLoader):
@@ -61,33 +104,41 @@ def eval(model: LSTMForCausalLM, test_dl: DataLoader):
     return compute_accuracy(all_logits, all_targets)
 
 if __name__ == "__main__":
+    set_seed(MANUAL_SEED)
+
+    kv = 16
+    lr = 1e-2
+    num_hidden_layers = 2
+    hidden_size = 256
+    l1_strength = 0.0000001
+        #     input_seq_len=4 * kv,
+        # vocab_size=4 * kv + 1,
+        # batch_size=256,
+        # num_kv_pairs=kv,
+
     # Use same data config as transformer baseline
     data_cfg = DataConfig(
         num_train_examples=100_000,
         num_test_examples=3_000,
-        input_seq_len=64,
-        vocab_size=65,
+        input_seq_len=4 * kv,
+        vocab_size=4 * kv + 1,
         batch_size=256,
-        num_kv_pairs=16,
+        num_kv_pairs=kv,
         train_power_a=0.01,
         test_power_a=0.01,
         random_non_queries=False,
-        seed=37,
+        seed=MANUAL_SEED,
     )
 
     # LSTM configuration with similar capacity to transformer baseline
     model_cfg = LSTMConfig(
         # core architecture
-        vocab_size=65,
-        hidden_size=256,
-        num_hidden_layers=2,
+        vocab_size=4 * kv + 1,
+        hidden_size=hidden_size,
+        num_hidden_layers=num_hidden_layers,
         num_proj=None,  # No projection, use full hidden size
         dropout=0.0,
 
-        # MLP (SwiGLU)
-        hidden_ratio=4,
-        intermediate_size=1024,
-        hidden_act="swish",
 
         # norms and numerics
         norm_eps=1e-6,
@@ -100,24 +151,23 @@ if __name__ == "__main__":
 
         # runtime semantics
         use_cache=False,
-        tie_word_embeddings=False,
     )
 
     train_dl, test_dl = get_dataloaders(data_cfg)
 
     # Create model and move to GPU 4 (cuda:4)
     model = LSTMForCausalLM(model_cfg).to(torch.device("cuda:0")).to(torch.float32)
+    print(f"Number of parameters: {model.num_parameters():,}")
 
-    from IPython import embed; embed()
     torch.compile(model)
     model.train()
 
 
-    # optimizer = optim.AdamW(model.parameters(),
-    #                         lr=1e-2,
-    #                         weight_decay=1e-6)
+    optimizer = optim.AdamW(model.parameters(),
+                            lr=lr,
+                            weight_decay=1e-6)
 
 
-    # model = train(model, train_dl, optimizer, 30)
-    # accuracy = eval(model, test_dl)
-    # print(f"Accuracy: {accuracy}")
+    model = train(model, train_dl, optimizer, 30, l1_strength=l1_strength)
+    accuracy = eval(model, test_dl)
+    print(f"Accuracy: {accuracy}")
