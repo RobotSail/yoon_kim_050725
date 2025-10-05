@@ -233,12 +233,14 @@ def get_dataloaders(cfg: DataConfig):
         cfg.random_non_queries,
         cfg.seed
     )
+    train_generator = torch.Generator().manual_seed(cfg.seed)
+    test_generator = torch.Generator().manual_seed(cfg.seed + 10)
     train_dl = DataLoader(
         TensorDataset(data.train_inputs, data.train_labels),
         batch_size=cfg.batch_size, 
-        shuffle=True)
+        shuffle=True, generator=train_generator)
     test_dl = DataLoader(
         TensorDataset(data.test_inputs, data.test_labels),
         batch_size=cfg.batch_size, 
-        shuffle=False)
+        shuffle=False, generator=test_generator)
     return train_dl, test_dl
