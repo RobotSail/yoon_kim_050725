@@ -56,6 +56,7 @@ def create_muon_optimizer(model: LSTMForCausalLM, lr: float, adamw_lr: float):
                 "params": [p for n, p in model.named_parameters() if n not in muon_names],
                 "lr": adamw_lr,
                 "use_muon": False,
+                "betas": (0.9, 0.95),
             }
         ]
     )
@@ -113,11 +114,13 @@ def eval(model: LSTMForCausalLM, test_dl: DataLoader):
 if __name__ == "__main__":
     set_seed(MANUAL_SEED)
 
-    kv = 16
+    kv = 64
     lr = 1e-2
+    muon_adamw_lr = 1e-2
     num_hidden_layers = 2
-    hidden_size = 256
-    l1_strength = 0.0000001
+    hidden_size = 512
+    l1_strength = 1e-7
+    num_epochs = 60
         #     input_seq_len=4 * kv,
         # vocab_size=4 * kv + 1,
         # batch_size=256,
@@ -174,11 +177,17 @@ if __name__ == "__main__":
     model.train()
 
 
-    optimizer = optim.AdamW(model.parameters(),
-                            lr=lr,
-                            weight_decay=1e-6)
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=lr,
+        # weight_decay=1e-6,
+        betas=(0.9, 0.95),
+    )
+
+    # optimizer = create_muon_optimizer(model, lr, muon_adamw_lr)
 
 
-    model = train(model, train_dl, optimizer, 30, l1_strength=l1_strength)
+
+    model = train(model, train_dl, optimizer, num_epochs, l1_strength=l1_strength)
     accuracy = eval(model, test_dl)
     print(f"Accuracy: {accuracy}")
