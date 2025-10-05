@@ -27,32 +27,39 @@ def set_seed(seed: int):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+# try muon
+from muon_fsdp2 import Muon
 
-# from muon_fsdp2 import Muon
+def muon_param_names(model: LSTMForCausalLM):
+    valid_params = []
+    for name, param in model.named_parameters():
+        if 'embeddings' in name or 'lm_head' in name:
+            continue
+        if param.dim() == 1:
+            continue
+        valid_params.append(name)
+    return valid_params
 
-# def muon_param_names(model: LSTMForCausalLM):
-#     valid_params = []
-#     for name, param in model.named_parameters():
-#         if param.dim() == 1:
-#             continue
-
-#         # ignore 1d vectors
-#         if 'embeddings' in name or 'lm_head' in name:
-#             continue
-        
-#         valid_params.append(name)
-    
-#     return valid_params
-
-# def create_muon_optimizer(model: LSTMForCausalLM, lr: float, adamw_lr: float):
-#     muon_names = muon_param_names(model)
-#     adamw_params = [n for n, p in model.named_parameters() if n not in muon_names]
-
-#     # create muon 
-#     muon_optimizer = Muon(
-#         lr=
-#     )
-
+def create_muon_optimizer(model: LSTMForCausalLM, lr: float, adamw_lr: float):
+    muon_names = muon_param_names(model)
+    muon_optimizer = Muon(
+        param_groups=[
+            {
+                "params": [p for n, p in model.named_parameters() if n in muon_names],
+                "lr": lr,
+                "use_muon": True,
+                "rms_scale": True,
+                "nesterov": True,
+                "ns_steps": 5,
+            },
+            {
+                "params": [p for n, p in model.named_parameters() if n not in muon_names],
+                "lr": adamw_lr,
+                "use_muon": False,
+            }
+        ]
+    )
+    return muon_optimizer
 
 
 
@@ -137,7 +144,11 @@ if __name__ == "__main__":
         hidden_size=hidden_size,
         num_hidden_layers=num_hidden_layers,
         num_proj=None,  # No projection, use full hidden size
-        dropout=0.0,
+        # dropout=0.1,
+
+        residual_connection=True,
+        residual_scale=1.0,
+        use_residual_layernorm=True,
 
 
         # norms and numerics

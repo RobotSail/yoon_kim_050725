@@ -62,6 +62,13 @@ class LSTMModel(LSTMPreTrainedModel):
             dropout=config.dropout if config.num_hidden_layers > 1 else 0.0,
         )
 
+        # Optional residual post-LSTM projection to match dims (kept identity when same size)
+        self.use_residual = bool(getattr(config, 'residual_connection', False))
+        self.residual_scale = float(getattr(config, 'residual_scale', 1.0))
+        self.use_residual_layernorm = bool(getattr(config, 'use_residual_layernorm', False))
+        if self.use_residual_layernorm:
+            self.residual_ln = nn.LayerNorm(config.hidden_size, eps=getattr(config, 'norm_eps', 1e-6), elementwise_affine=getattr(config, 'elementwise_affine', True))
+
         self.post_init()
 
     def get_input_embeddings(self):
@@ -98,6 +105,14 @@ class LSTMModel(LSTMPreTrainedModel):
             lstm_out, (h_n, c_n) = self.lstm(inputs_embeds, past_key_values)
         else:
             lstm_out, (h_n, c_n) = self.lstm(inputs_embeds)
+
+        # Optional residual connection: add input embeddings to LSTM output
+        if self.use_residual:
+            # Ensure shapes are compatible; both are (batch, seq, hidden)
+            residual = inputs_embeds
+            lstm_out = lstm_out + self.residual_scale * residual
+            if self.use_residual_layernorm:
+                lstm_out = self.residual_ln(lstm_out)
 
         # Collect hidden states if requested
         all_hidden_states = None

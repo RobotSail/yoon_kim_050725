@@ -17,6 +17,13 @@ class LSTMConfig(PretrainedConfig):
         dropout: float = 0.0,
         initializer_range: float = 0.02,
         use_cache: bool = True,
+        # residuals
+        residual_connection: bool = False,
+        residual_scale: float = 1.0,
+        use_residual_layernorm: bool = False,
+        # norms
+        norm_eps: float = 1e-6,
+        elementwise_affine: bool = True,
         pad_token_id: Optional[int] = None,
         bos_token_id: int = 1,
         eos_token_id: int = 2,
@@ -30,6 +37,13 @@ class LSTMConfig(PretrainedConfig):
         self.initializer_range = initializer_range
         self.use_cache = use_cache
         self.vocab_size = vocab_size
+        # residuals
+        self.residual_connection = residual_connection
+        self.residual_scale = residual_scale
+        self.use_residual_layernorm = use_residual_layernorm
+        # norms
+        self.norm_eps = norm_eps
+        self.elementwise_affine = elementwise_affine
 
         super().__init__(
             pad_token_id=pad_token_id,
