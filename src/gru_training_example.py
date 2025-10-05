@@ -3,15 +3,14 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from fla.models.transformer.modeling_transformer import TransformerForCausalLM
-from fla.models.transformer.configuration_transformer import TransformerConfig
+from fla.models.gru.modeling_gru import GRUForCausalLM
+from fla.models.gru.configuration_gru import GRUConfig
 
-# from model_cfgs.transformer_cfg import cfg as transformer_cfg
 from data_gen import DataConfig, get_dataloaders
 from hack_utils import non_shifting_loss, compute_accuracy
 
 def train(
-    model: TransformerForCausalLM,
+    model: GRUForCausalLM,
     train_dl: DataLoader,
     optimizer: optim.Optimizer,
     max_epochs: int,
@@ -29,7 +28,7 @@ def train(
         print(f"Epoch {epoch}, Loss: {loss.item()}")
     return model
 
-def eval(model: TransformerForCausalLM, test_dl: DataLoader):
+def eval(model: GRUForCausalLM, test_dl: DataLoader):
     model.eval()
     all_logits = []
     all_targets = []
@@ -45,8 +44,6 @@ def eval(model: TransformerForCausalLM, test_dl: DataLoader):
     return compute_accuracy(all_logits, all_targets)
 
 if __name__ == "__main__":
-    # ORIGINAL DATA BASELINE, but we can scale this up
-    # once we start beating the original
     data_cfg = DataConfig(
         num_train_examples=100_000,
         num_test_examples=3_000,
@@ -59,22 +56,15 @@ if __name__ == "__main__":
         random_non_queries=False,
         seed=37,
     )
-    # THIS IS WHAT ALDO PROVIDED US, USE THIS 
-    # AS THE BASELINE
-    model_cfg = TransformerConfig(
+    model_cfg = GRUConfig(
         # core architecture
         vocab_size=65,
         hidden_size=256,
         num_hidden_layers=2,
-        num_heads=1,
-        num_kv_heads=None,
-        max_position_embeddings=1024,
-        rope_theta=10000.0,
-        qkv_bias=False,
-        qk_norm=False,
-        window_size=None,
+        dropout=0.0,
+        bidirectional=False,
 
-        # MLP (SwiGLU)
+        # MLP (SwiGLU) - GRU also supports these
         hidden_ratio=4,
         intermediate_size=1024,
         hidden_act="swish",
@@ -83,7 +73,6 @@ if __name__ == "__main__":
         norm_eps=1e-6,
         elementwise_affine=True,
         fuse_norm=False,
-        fuse_swiglu=False,
         fuse_cross_entropy=False,
         fuse_linear_cross_entropy=False,
         use_l2warp=False,
@@ -95,8 +84,9 @@ if __name__ == "__main__":
 
     train_dl, test_dl = get_dataloaders(data_cfg)
 
-    # model_cfg = transformer_cfg
-    model = TransformerForCausalLM(model_cfg).to(torch.device("cuda:0")).to(torch.bfloat16)
+    # model_cfg = gru_cfg
+    # we will use float32 for ours
+    model = GRUForCausalLM(model_cfg).to(torch.device("cuda:0")).to(torch.float32)  
     torch.compile(model)
 
     optimizer = optim.AdamW(model.parameters(), 
