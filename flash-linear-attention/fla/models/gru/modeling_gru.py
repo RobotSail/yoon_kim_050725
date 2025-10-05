@@ -131,7 +131,7 @@ class GRUModel(GRUPreTrainedModel):
         if not return_dict:
             return (hidden_states, None, None, None)
 
-        return BaseModelOutputWithPast(
+        return BaseMo delOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=None,
             hidden_states=None,
